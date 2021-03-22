@@ -13,7 +13,7 @@ from torchvision import datasets, transforms
 
 from models.mobilenetv2 import MobileNetV2
 
-def set_random_seeds(random_seed):
+def set_random_seeds(random_seed, use_multi_gpu=False):
     '''Set random seeds.
     
     Args:
@@ -21,7 +21,9 @@ def set_random_seeds(random_seed):
     '''
     torch.manual_seed(random_seed)
     torch.cuda.manual_seed(random_seed)
-    # torch.cuda.manual_seed_all(random_seed) # if use multi-GPU
+    if use_multi_gpu:
+        torch.cuda.manual_seed_all(random_seed)
+
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     np.random.seed(random_seed)
@@ -77,7 +79,7 @@ def load_data(data_dir, dataset=0):
     return dataloaders, dataset_sizes
 
 def load_model(device, width_mult=1.0, use_res_connect=True, linear_bottleneck=True,
-               res_loc=0, num_classes=10, pretrained_path=''):
+               res_loc=0, num_classes=10, pretrained_path='', use_multi_gpu=False):
     '''Load model, loss function, optimizer and scheduler.
 
     Args:
@@ -101,7 +103,13 @@ def load_model(device, width_mult=1.0, use_res_connect=True, linear_bottleneck=T
                         width_mult=width_mult,
                         use_res_connect=use_res_connect,
                         linear_bottleneck=linear_bottleneck,
-                        res_loc=res_loc).to(device)
+                        res_loc=res_loc)
+
+    # Device Settings (Single GPU or Multi-GPU)
+    if use_multi_gpu:
+        model = torch.nn.DataParallel(model).to(device)
+    else:
+        model = model.to(device)
     
     if pretrained_path:
         model.load_state_dict(torch.load(pretrained_path))
@@ -262,7 +270,8 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', type=int, help='Epoch', default=200)
     parser.add_argument('--random_seed', type=int, help='Random seed for reproducibility', default=0)
     parser.add_argument('--print_to_file', action='store_true', help='Whether to print results or not')
-    
+    parser.add_argument('--use_multi_gpu', action='store_true', help='Whether to use multi-gpu or not')
+
     args = parser.parse_args()
 
     # Set print function
@@ -272,7 +281,7 @@ if __name__ == '__main__':
     print = set_print_to_file(print, args.print_to_file, id)
 
     # Set Random Seeds
-    set_random_seeds(args.random_seed)
+    set_random_seeds(args.random_seed, args.use_multi_gpu)
 
     # Load dataset
     dataloaders, dataset_sizes = load_data(args.data_dir, args.dataset)
@@ -285,7 +294,8 @@ if __name__ == '__main__':
                                                         args.linear_bottleneck,
                                                         args.res_loc,
                                                         NUM_CLS[args.dataset],
-                                                        args.pretrained_path)
+                                                        args.pretrained_path,
+                                                        args.use_multi_gpu)
     model = train_model(dataloaders, dataset_sizes, device,
                         model, criterion, optimizer, scheduler,
                         args.save_model, args.model_dir,

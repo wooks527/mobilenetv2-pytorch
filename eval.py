@@ -34,7 +34,7 @@ def load_data(data_dir):
 
     return dataloader, dataset_size
 
-def load_model(device, model_path, width_mult=1.0, use_res_connect=True, res_loc=0):
+def load_model(device, model_path, width_mult=1.0, use_res_connect=True, res_loc=0, use_multi_gpu=False):
     '''Load model, loss function, optimizer and scheduler.
 
     Args:
@@ -53,9 +53,15 @@ def load_model(device, model_path, width_mult=1.0, use_res_connect=True, res_loc
     model = MobileNetV2(num_classes=10,
                         width_mult=width_mult,
                         use_res_connect=use_res_connect,
-                        res_loc=res_loc).to(device)
-    model.load_state_dict(torch.load(model_path))
+                        res_loc=res_loc)
 
+    # Device Settings (Single GPU or Multi-GPU)
+    if use_multi_gpu:
+        model = nn.DataParallel(model).to(device)
+    else:
+        model = model.to(device)
+
+    model.load_state_dict(torch.load(model_path))
     criterion = nn.CrossEntropyLoss()
 
     return model, criterion
@@ -112,6 +118,7 @@ if __name__ == '__main__':
     parser.add_argument('--width_mult', type=float, help='Width for multiplier', default=1.0)
     parser.add_argument('--use_res_connect', action='store_true', help='Whether to use residual connection or not')
     parser.add_argument('--res_loc', type=int, help='Location of residual connections (e.g. Between bottlenecks -> 0', default=0)
+    parser.add_argument('--use_multi_gpu', action='store_true', help='Whether to use multi-gpu or not')
     args = parser.parse_args()
 
     # Check a model path
@@ -123,5 +130,5 @@ if __name__ == '__main__':
     # Load and train MobileNetV2
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model, criterion = load_model(device, args.model_path, args.width_mult,
-                                  args.use_res_connect, args.res_loc)
+                                  args.use_res_connect, args.res_loc, args.use_multi_gpu)
     eval_model(dataloader, dataset_size, device, model, criterion)
