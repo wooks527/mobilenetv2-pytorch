@@ -4,7 +4,6 @@ This repository provide CNN tutorials to construct, train and evaluate CNN model
 
 
 ## Getting Started
----
 
 ### Prerequsites
 
@@ -36,11 +35,9 @@ python eval.py --model_path ./trained_models/[trained_model_file_name] --use_res
 
 
 ## CNN Models
----
 
 - MobileNetV2
 
 ## Licence
----
 
 Distributed under the MIT License. See `LICENSE` for more information.
