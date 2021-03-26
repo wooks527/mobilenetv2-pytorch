@@ -11,7 +11,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 
+from models.parallel import DataParallelModel, DataParallelCriterion
 from models.mobilenetv2 import MobileNetV2
+from cfg.mobilenetv2_config import Config
 
 def set_random_seeds(random_seed, use_multi_gpu=False):
     '''Set random seeds.
@@ -29,7 +31,7 @@ def set_random_seeds(random_seed, use_multi_gpu=False):
     np.random.seed(random_seed)
     random.seed(random_seed)
 
-def load_data(data_dir, dataset=0):
+def load_data(data_dir, dataset='cifar10', batch_size=128):
     '''Load dataset.
     
     Args:
@@ -39,38 +41,57 @@ def load_data(data_dir, dataset=0):
         dataloaders (dict): data loaders for training and validation
         dataset_sizes (dict): each dataset size
     '''
-    CIFAR10, CIFAR100 = 0, 1
-    DATASET = ['CIFAR-10', 'CIFAR-100']
-
-    data_transforms = {
-        'train': transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
-        ]),
-        'val': transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ]),
-    }
+    if 'cifar' in dataset:
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+            ]),
+            'val': transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+            ]),
+        }
+    elif dataset == 'imagenet':
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+            ]),
+            'val': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+            ]),
+        }
+    else:
+        assert False, 'You choose wrong dataset.'
 
     # Download or load image datasets
-    if dataset == CIFAR10:
+    if dataset == 'cifar10':
         image_datasets = {x: datasets.CIFAR10(root='./data',
                                               train=True if x == 'train' else False,
                                               download=True, transform=data_transforms[x])
                              for x in ['train', 'val']}
-    elif dataset == CIFAR100:
+    elif dataset == 'cifar100':
         image_datasets = {x: datasets.CIFAR100(root='./data',
                                                train=True if x == 'train' else False,
                                                download=True, transform=data_transforms[x])
+                             for x in ['train', 'val']}
+    elif dataset == 'imagenet':
+        image_datasets = {x: datasets.ImageFolder(root=f'./data/imagenet/{x}',
+                                                  transform=data_transforms[x])
                              for x in ['train', 'val']}
     else:
         assert False, 'Invalid Dataset.'
 
     # Create dataloaders
-    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=128,
+    dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=batch_size,
                                                   shuffle=True if x == 'train' else False,
                                                   num_workers=6)
                       for x in ['train', 'val']}
@@ -79,7 +100,8 @@ def load_data(data_dir, dataset=0):
     return dataloaders, dataset_sizes
 
 def load_model(device, width_mult=1.0, use_res_connect=True, linear_bottleneck=True,
-               res_loc=0, num_classes=10, pretrained_path='', use_multi_gpu=False):
+               res_loc=0, num_classes=10, pretrained_path='', use_multi_gpu=False,
+               inverted_residual_setting=[], first_layer_stride=1, lr=0.1, t_max=200):
     '''Load model, loss function, optimizer and scheduler.
 
     Args:
@@ -103,29 +125,32 @@ def load_model(device, width_mult=1.0, use_res_connect=True, linear_bottleneck=T
                         width_mult=width_mult,
                         use_res_connect=use_res_connect,
                         linear_bottleneck=linear_bottleneck,
-                        res_loc=res_loc)
+                        res_loc=res_loc,
+                        inverted_residual_setting=inverted_residual_setting,
+                        first_layer_stride=first_layer_stride)
 
     # Device Settings (Single GPU or Multi-GPU)
     if use_multi_gpu:
-        model = torch.nn.DataParallel(model).to(device)
+        model = DataParallelModel(model).to(device)
+        criterion = DataParallelCriterion(nn.CrossEntropyLoss())
     else:
         model = model.to(device)
+        criterion = nn.CrossEntropyLoss()
     
     if pretrained_path:
         model.load_state_dict(torch.load(pretrained_path))
 
-    criterion = nn.CrossEntropyLoss()
     # optimizer = optim.RMSprop(model.parameters(), lr=0.045, momentum=0.9, weight_decay=0.00004)
-    optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
 
     return model, criterion, optimizer, scheduler
 
 
 def train_model(dataloaders, dataset_sizes, device,
                 model, criterion, optimizer, scheduler,
-                save_model, model_dir, save_acc, result_dir,
-                num_epochs=200):
+                save_model, model_dir, save_acc, save_loss,
+                result_dir, num_epochs=200, use_multi_gpu=False):
     '''Train and evaluate model.
 
     Args:
@@ -150,7 +175,7 @@ def train_model(dataloaders, dataset_sizes, device,
     best_model_wts = copy.deepcopy(model.state_dict())
     best_opt_wts = copy.deepcopy(optimizer.state_dict())
     best_acc = 0.0
-    running_accs = []
+    running_losses, running_accs = [], []
 
     for epoch in range(num_epochs):
         print('\nEpoch {}/{}'.format(epoch, num_epochs - 1))
@@ -178,8 +203,15 @@ def train_model(dataloaders, dataset_sizes, device,
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    outputs = model(inputs)
-                    _, preds = torch.max(outputs, 1)
+                    # Prediction
+                    if use_multi_gpu:
+                        outputs, gathered_outputs = model(inputs)
+                        _, preds = torch.max(gathered_outputs, 1)
+                    else:
+                        outputs = model(inputs)
+                        _, preds = torch.max(outputs, 1)
+
+                    # Calculate a loss
                     loss = criterion(outputs, labels)
 
                     # backward + optimize only if in training phase
@@ -189,6 +221,7 @@ def train_model(dataloaders, dataset_sizes, device,
 
                 # statistics
                 running_loss += loss.item() * inputs.size(0)
+                running_losses.append(loss.item())
                 running_corrects += torch.sum(preds == labels.data)
                 running_acc = torch.sum(preds == labels.data).double() / batch_size
                 running_accs.append(running_acc.item())
@@ -246,9 +279,29 @@ def train_model(dataloaders, dataset_sizes, device,
         plt.title('Training Results') 
 
         plt.savefig(f'{result_dir}/acc_{id}.png')
+        plt.clf() # https://www.activestate.com/resources/quick-reads/how-to-clear-a-plot-in-python/
 
         with open(f'{result_dir}/acc_{id}.txt', 'w') as f:
             f.write('\n'.join(list(map(str, running_accs))))
+
+    if save_loss:
+        # For Loss
+        steps = range(len(running_losses))
+        
+        # plotting the points  
+        plt.plot(steps, running_losses)
+        
+        # naming the x and y axis 
+        plt.xlabel('Steps') 
+        plt.ylabel('Loss') 
+        
+        # giving a title to my graph 
+        plt.title('Training Results') 
+
+        plt.savefig(f'{result_dir}/loss_{id}.png')
+
+        with open(f'{result_dir}/loss_{id}.txt', 'w') as f:
+            f.write('\n'.join(list(map(str, running_losses))))
 
     return model
 
@@ -257,11 +310,12 @@ if __name__ == '__main__':
     # Parse arguments
     parser = argparse.ArgumentParser(description='Train MobileNetV2')
     parser.add_argument('--data_dir', type=str, help='Path of input data', default='./data')
-    parser.add_argument('--dataset', type=int, help='Dataset: 0 (CIFAR-10), 1 (CIFAR-100)', default=0)
+    parser.add_argument('--dataset', type=str, help='cifar10, cifar100, imagenet', default='cifar10')
     parser.add_argument('--save_model', action='store_true', help='Whether to save model or not')
     parser.add_argument('--pretrained_path', type=str, help='Path of model to save', default='')
     parser.add_argument('--model_dir', type=str, help='Path of model to save', default='./trained_models')
     parser.add_argument('--save_acc', action='store_true', help='Whether to save accruacies or not')
+    parser.add_argument('--save_loss', action='store_true', help='Whether to save losses or not')
     parser.add_argument('--result_dir', type=str, help='Path of results to save', default='./results')
     parser.add_argument('--width_mult', type=float, help='Width for multiplier', default=1.0)
     parser.add_argument('--use_res_connect', action='store_true', help='Whether to use residual connection or not')
@@ -269,10 +323,14 @@ if __name__ == '__main__':
     parser.add_argument('--linear_bottleneck', action='store_true', help='Whether to use Linear Bottlenck or not')
     parser.add_argument('--epoch', type=int, help='Epoch', default=200)
     parser.add_argument('--random_seed', type=int, help='Random seed for reproducibility', default=0)
+    parser.add_argument('--batch_size', type=int, help='Batch Size', default=128)
     parser.add_argument('--print_to_file', action='store_true', help='Whether to print results or not')
     parser.add_argument('--use_multi_gpu', action='store_true', help='Whether to use multi-gpu or not')
+    parser.add_argument('--lr', type=float, help='Learning rate', default=0.1)
+    parser.add_argument('--t_max', type=int, help='T_max for cosine annealing', default=200)
 
     args = parser.parse_args()
+    cfg = Config(args.dataset)
 
     # Set print function
     from utils import init_file_for_print, set_print_to_file
@@ -284,19 +342,24 @@ if __name__ == '__main__':
     set_random_seeds(args.random_seed, args.use_multi_gpu)
 
     # Load dataset
-    dataloaders, dataset_sizes = load_data(args.data_dir, args.dataset)
-    NUM_CLS = [10, 100]
+    dataloaders, dataset_sizes = load_data(args.data_dir, args.dataset, args.batch_size)
 
-    # Load and train MobileNetV2
+    # Load MobileNetV2
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model, criterion, optimizer, scheduler = load_model(device, args.width_mult,
                                                         args.use_res_connect,
                                                         args.linear_bottleneck,
                                                         args.res_loc,
-                                                        NUM_CLS[args.dataset],
+                                                        cfg.num_cls,
                                                         args.pretrained_path,
-                                                        args.use_multi_gpu)
+                                                        args.use_multi_gpu,
+                                                        cfg.inverted_residual_setting,
+                                                        cfg.first_layer_stride,
+                                                        args.lr, args.t_max)
+    
+    # Train MobileNetV2
     model = train_model(dataloaders, dataset_sizes, device,
                         model, criterion, optimizer, scheduler,
                         args.save_model, args.model_dir,
-                        args.save_acc, args.result_dir, args.epoch)
+                        args.save_acc, args.save_loss, args.result_dir,
+                        args.epoch, args.use_multi_gpu)

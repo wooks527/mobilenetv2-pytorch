@@ -150,7 +150,9 @@ class ProjExpDepthBlock(nn.Module):
 
 class MobileNetV2(nn.Module):
     def __init__(self, num_classes=1000, width_mult=1.0, round_nearest=8,
-                 use_res_connect=True, linear_bottleneck=True, res_loc=0):
+                 use_res_connect=True, linear_bottleneck=True, res_loc=0,
+                 inverted_residual_setting=[], first_layer_stride=2):
+                 
         def _make_divisible(v, divisor, min_value=None):
             """It ensures that all layers have a channel number that is divisible by a divisor (e.g. 8).
                This function is implemented original repository:
@@ -182,32 +184,19 @@ class MobileNetV2(nn.Module):
             return new_v
 
         super(MobileNetV2, self).__init__()
-        self.BOTTLENECKS, self.EXPLOSIONS, self.DEPTHWISE = 0, 1, 2
-
-        input_channel, last_channel = 32, 1280
-        inverted_residual_setting = [
-            # t: expand ratio, c: output channel,
-            # n: repeat times, s: stride
-            # -----------------------------------
-            # t, c, n, s      Input (Base)
-            [1, 16, 1, 1],  #  32 x  32 x 32
-            [6, 24, 2, 1],  #  32 x  32 x 16, NOTE: change stride 2 -> 1 for CIFAR10
-            [6, 32, 3, 2],  #  56 x  56 x 24
-            [6, 64, 4, 2],  #  28 x  28 x 32
-            [6, 96, 3, 1],  #  14 x  14 x 64
-            [6, 160, 3, 2], #  14 x  14 x 96
-            [6, 320, 1, 1], #   7 x   7 x 160
-        ]
+        BOTTLENECKS, EXPLOSIONS, DEPTHWISE = 0, 1, 2
 
         # Build a first layer.
         # I don't know why max function was used for last_channel.
         # I think it decreases performance to reduce the number of last channel with width_mult.
+        input_channel, last_channel = 32, 1280
         input_channel = _make_divisible(input_channel * width_mult, round_nearest)
         self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), round_nearest)
-        # features = [ConvBNReLU6(3, input_channel, stride=2)] # 224x224x3, c:32, n:1, s:2
-        features = [ConvBNReLU6(in_channels=3, out_channels=input_channel, stride=1)] # 224x224x3, c:32, n:1, s:1
+        features = [ConvBNReLU6(in_channels=3,
+                                out_channels=input_channel,
+                                stride=first_layer_stride)]
 
-        if res_loc == self.BOTTLENECKS:
+        if res_loc == BOTTLENECKS:
             # Build inverted residual blocks.
             for t, c, n, s in inverted_residual_setting:
                 output_channel = _make_divisible(c * width_mult, round_nearest)
@@ -218,7 +207,7 @@ class MobileNetV2(nn.Module):
                                                      use_res_connect=use_res_connect,
                                                      linear_bottleneck=linear_bottleneck))
                     input_channel = output_channel
-        elif res_loc == self.EXPLOSIONS:
+        elif res_loc == EXPLOSIONS:
             for t, c, n, s in inverted_residual_setting:
                 # Expand the number of a channel (first)
                 hidden_dim = int(round(input_channel * t))
@@ -250,7 +239,7 @@ class MobileNetV2(nn.Module):
                                      ConvBNReLU6(hidden_dim, output_channel, kernel_size=1,
                                                  stride=1, padding=0)])
                 input_channel = output_channel
-        elif res_loc == self.DEPTHWISE:
+        elif res_loc == DEPTHWISE:
             for t, c, n, s in inverted_residual_setting:
                 # Expand the number of a channel (first)
                 hidden_dim = int(round(input_channel * t))
@@ -280,8 +269,6 @@ class MobileNetV2(nn.Module):
                     features.append([ConvBNReLU6(hidden_dim, output_channel, kernel_size=1,
                                                  stride=1, padding=0)])
                 input_channel = output_channel
-                
-            pass
         else:
             assert False, 'You choose a wrong location for residual connections.'
 
@@ -295,18 +282,18 @@ class MobileNetV2(nn.Module):
         self.classifier = nn.Sequential(nn.Dropout(0.2),
                                         nn.Linear(self.last_channel, num_classes))
 
-        # # Weight initialization
-        # for m in self.modules():
-        #     if isinstance(m, nn.Conv2d):
-        #         nn.init.kaiming_normal_(m.weight, mode='fan_out')
-        #         if m.bias is not None:
-        #             nn.init.zeros_(m.bias)
-        #     elif isinstance(m, (nn.BatchNorm2d)):
-        #         nn.init.ones_(m.weight)
-        #         nn.init.zeros_(m.bias)
-        #     elif isinstance(m, nn.Linear):
-        #         nn.init.normal_(m.weight, 0, 0.01)
-        #         nn.init.zeros_(m.bias)
+        # Weight initialization
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, (nn.BatchNorm2d)):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.zeros_(m.bias)
 
     def _forward_impl(self, x):
         # This exists since TorchScript doesn't support inheritance, so the superclass method
@@ -315,8 +302,8 @@ class MobileNetV2(nn.Module):
         # the shape of adaptive_avg_pool2d output: (B, C, 1, 1)
         # the shape of reshape result: (B, C)
         # Reference: https://wikidocs.net/52846
-        # x = nn.functional.adaptive_avg_pool2d(x, 1).reshape(x.shape[0], -1)
-        x = nn.functional.avg_pool2d(x, 4).reshape(x.shape[0], -1)
+        x = nn.functional.adaptive_avg_pool2d(x, 1).reshape(x.shape[0], -1)
+        # x = nn.functional.avg_pool2d(x, 4).reshape(x.shape[0], -1)
         x = self.classifier(x)
         return x
 
