@@ -9,7 +9,7 @@ This repository provide CNN tutorials to construct, train and evaluate CNN model
 | MobileNetV2 1.0 | CIFAR-10 | 95.11% | 2.236M |
 | MobileNetV2 1.0 | CIFAR-100 | 76.72% | 2.351M |
 | MobileNetV2 1.0 | ImageNet (sample) | 38.78% | 3.504M |
-| MobileNetV2 1.0 | ImageNet | - | 3.504M |
+| MobileNetV2 1.0 | ImageNet | 71.48% | 3.504M |
 
 ## Getting Started
 

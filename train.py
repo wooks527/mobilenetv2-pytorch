@@ -14,6 +14,7 @@ from torchvision import datasets, transforms
 from models.parallel import DataParallelModel, DataParallelCriterion
 from models.mobilenetv2 import MobileNetV2
 from cfg.mobilenetv2_config import Config
+from utils import CosineAnnealingWarmupRestarts, GradualWarmupScheduler
 
 def set_random_seeds(random_seed, use_multi_gpu=False):
     '''Set random seeds.
@@ -101,7 +102,7 @@ def load_data(data_dir, dataset='cifar10', batch_size=128):
 
 def load_model(device, width_mult=1.0, use_res_connect=True, linear_bottleneck=True,
                res_loc=0, num_classes=10, pretrained_path='', use_multi_gpu=False,
-               inverted_residual_setting=[], first_layer_stride=1, lr=0.1, t_max=200):
+               inverted_residual_setting=[], first_layer_stride=1, lr=0.1, t_max=200, eta_min=0):
     '''Load model, loss function, optimizer and scheduler.
 
     Args:
@@ -141,8 +142,17 @@ def load_model(device, width_mult=1.0, use_res_connect=True, linear_bottleneck=T
         model.load_state_dict(torch.load(pretrained_path))
 
     # optimizer = optim.RMSprop(model.parameters(), lr=0.045, momentum=0.9, weight_decay=0.00004)
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
+    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=4e-5)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max, eta_min=eta_min)
+    # scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=5, after_scheduler=scheduler)
+    # scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
+    # scheduler = CosineAnnealingWarmupRestarts(optimizer,
+    #                                           first_cycle_steps=150,
+    #                                           cycle_mult=1.0,
+    #                                           max_lr=lr,
+    #                                           min_lr=0.0,
+    #                                           warmup_steps=5,
+    #                                           gamma=1.0)
 
     return model, criterion, optimizer, scheduler
 
@@ -176,6 +186,7 @@ def train_model(dataloaders, dataset_sizes, device,
     best_opt_wts = copy.deepcopy(optimizer.state_dict())
     best_acc = 0.0
     running_losses, running_accs = [], []
+    id = round(time.time())
 
     for epoch in range(num_epochs):
         print('\nEpoch {}/{}'.format(epoch, num_epochs - 1))
@@ -241,6 +252,13 @@ def train_model(dataloaders, dataset_sizes, device,
                 best_model_wts = copy.deepcopy(model.state_dict())
                 best_opt_wts = copy.deepcopy(optimizer.state_dict())
 
+            if save_model:
+                if not os.path.isdir(model_dir):
+                    os.mkdir(model_dir)
+
+                torch.save(model.state_dict(), f'{model_dir}/mobilenetv2_{id}_{epoch}')
+                torch.save(best_opt_wts, f'{model_dir}/mobilenetv2_{id}_opt_{epoch}')
+
         print()
 
     time_elapsed = time.time() - since
@@ -252,13 +270,12 @@ def train_model(dataloaders, dataset_sizes, device,
     model.load_state_dict(best_model_wts)
 
     # save best model weights
-    id = round(time.time())
     if save_model:
         if not os.path.isdir(model_dir):
             os.mkdir(model_dir)
 
-        torch.save(model.state_dict(), f'{model_dir}/mobilenetv2_{id}')
-        torch.save(best_opt_wts, f'{model_dir}/mobilenetv2_{id}_opt')
+        torch.save(model.state_dict(), f'{model_dir}/mobilenetv2_{id}_best')
+        torch.save(best_opt_wts, f'{model_dir}/mobilenetv2_{id}_opt_best')
 
     # save accruacies
     # https://www.geeksforgeeks.org/graph-plotting-in-python-set-1/
@@ -328,6 +345,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_multi_gpu', action='store_true', help='Whether to use multi-gpu or not')
     parser.add_argument('--lr', type=float, help='Learning rate', default=0.1)
     parser.add_argument('--t_max', type=int, help='T_max for cosine annealing', default=200)
+    parser.add_argument('--eta_min', type=float, help='eta_min for cosine annealing', default=0.0)
 
     args = parser.parse_args()
     cfg = Config(args.dataset)
@@ -355,7 +373,7 @@ if __name__ == '__main__':
                                                         args.use_multi_gpu,
                                                         cfg.inverted_residual_setting,
                                                         cfg.first_layer_stride,
-                                                        args.lr, args.t_max)
+                                                        args.lr, args.t_max, args.eta_min)
     
     # Train MobileNetV2
     model = train_model(dataloaders, dataset_sizes, device,
