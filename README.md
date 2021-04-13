@@ -1,6 +1,6 @@
-# CNN Tutorial
+# MobileNetV2-PyTorch
 
-This repository provide CNN tutorials to construct, train and evaluate CNN models based on PyTorch. Also, you can do ablation tests mentioned in each CNN paper using this repository.
+This repository provide codes to construct, train and evaluate MobileNetV2 for image classification tasks based on PyTorch. Using these codes, you can do ablation tests mentioned in each CNN paper using this repository.
 
 ## Performances
 
@@ -10,6 +10,10 @@ This repository provide CNN tutorials to construct, train and evaluate CNN model
 | MobileNetV2 1.0 | CIFAR-100 | 76.72% | 2.351M |
 | MobileNetV2 1.0 | ImageNet (sample) | 38.78% | 3.504M |
 | MobileNetV2 1.0 | ImageNet | 71.48% | 3.504M |
+
+## Detailed Experimental Results
+
+Also, you can see all of the details for experiments for image classification tasks using CIFAR-10/100 and ImageNet Dataset in [CNN Tutorials](https://www.notion.so/CNN-Tutorial-ddd78f6c58274959a875f12680758465) Notion page.
 
 ## Getting Started
 
