@@ -8,7 +8,6 @@ This repository provide codes to construct, train and evaluate MobileNetV2 for i
 |:-|:-:|:-:|:-:|
 | MobileNetV2 1.0 | CIFAR-10 | 95.11% | 2.236M |
 | MobileNetV2 1.0 | CIFAR-100 | 76.72% | 2.351M |
-| MobileNetV2 1.0 | ImageNet (sample) | 38.78% | 3.504M |
 | MobileNetV2 1.0 | ImageNet | 71.48% | 3.504M |
 
 ## Detailed Experimental Results
